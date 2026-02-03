@@ -426,9 +426,9 @@ export default function Home() {
           {/* Timer Cards in grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {/* Leetcode Countdown */}
-            <div className={`glass-card-strong p-8 text-center${lcRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center overflow-hidden min-w-0${lcRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Leetcode</h2>
-              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+              <div className="timer-display text-3xl lg:text-4xl font-light text-white mb-6">
                 {mounted ? formatTime(lcRemaining) : formatTime(LEETCODE_TOTAL_SECONDS)}
               </div>
               <div className="flex gap-3 justify-center">
@@ -458,9 +458,9 @@ export default function Home() {
             </div>
 
             {/* Project Stopwatch */}
-            <div className={`glass-card-strong p-8 text-center${projRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center overflow-hidden min-w-0${projRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Project</h2>
-              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+              <div className="timer-display text-3xl lg:text-4xl font-light text-white mb-6">
                 {mounted ? formatTime(projElapsed) : formatTime(0)}
               </div>
               <div className="flex gap-3 justify-center">
@@ -483,9 +483,9 @@ export default function Home() {
             </div>
 
             {/* Study Stopwatch */}
-            <div className={`glass-card-strong p-8 text-center${studyRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center overflow-hidden min-w-0${studyRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Study</h2>
-              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+              <div className="timer-display text-3xl lg:text-4xl font-light text-white mb-6">
                 {mounted ? formatTime(studyElapsed) : formatTime(0)}
               </div>
               <div className="flex gap-3 justify-center">
@@ -508,9 +508,9 @@ export default function Home() {
             </div>
 
             {/* Application Stopwatch */}
-            <div className={`glass-card-strong p-8 text-center${appRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center overflow-hidden min-w-0${appRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Application</h2>
-              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+              <div className="timer-display text-3xl lg:text-4xl font-light text-white mb-6">
                 {mounted ? formatTime(appElapsed) : formatTime(0)}
               </div>
               <div className="flex gap-3 justify-center">

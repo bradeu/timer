@@ -151,7 +151,8 @@ body {
   font-family: 'Century Gothic', 'AppleGothic', 'Futura', sans-serif;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 40px rgba(255, 255, 255, 0.3);
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 /* Leaderboard item */
