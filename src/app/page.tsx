@@ -168,21 +168,29 @@ export default function Home() {
   const [lcRemaining, setLcRemaining] = useState(LEETCODE_TOTAL_SECONDS);
   const [lcRunning, setLcRunning] = useState(false);
   const lcInterval = useRef<NodeJS.Timeout | null>(null);
+  const lcStartedAt = useRef<number>(0); // timestamp when started
+  const lcBaseRemaining = useRef<number>(LEETCODE_TOTAL_SECONDS); // remaining at start
 
   // Project stopwatch
   const [projElapsed, setProjElapsed] = useState(0);
   const [projRunning, setProjRunning] = useState(false);
   const projInterval = useRef<NodeJS.Timeout | null>(null);
+  const projStartedAt = useRef<number>(0);
+  const projBaseElapsed = useRef<number>(0);
 
   // Study stopwatch
   const [studyElapsed, setStudyElapsed] = useState(0);
   const [studyRunning, setStudyRunning] = useState(false);
   const studyInterval = useRef<NodeJS.Timeout | null>(null);
+  const studyStartedAt = useRef<number>(0);
+  const studyBaseElapsed = useRef<number>(0);
 
   // Application stopwatch
   const [appElapsed, setAppElapsed] = useState(0);
   const [appRunning, setAppRunning] = useState(false);
   const appInterval = useRef<NodeJS.Timeout | null>(null);
+  const appStartedAt = useRef<number>(0);
+  const appBaseElapsed = useRef<number>(0);
 
   // Calendar
   const [completedDates, setCompletedDates] = useState<Set<string>>(new Set());
@@ -276,25 +284,27 @@ export default function Home() {
   // ── Leetcode timer tick ──
   useEffect(() => {
     if (lcRunning) {
+      lcStartedAt.current = Date.now();
+      lcBaseRemaining.current = lcRemaining;
       lcInterval.current = setInterval(() => {
-        setLcRemaining((prev) => {
-          const next = prev - 1;
-          if (next <= 0) {
-            setLcRunning(false);
-            setCompletedDates((dates) => {
-              const updated = new Set(dates);
-              const today = getTodayString();
-              updated.add(today);
-              saveCompletedDates(updated);
-              supabaseInsertCompleted(today).catch(() => {});
-              return updated;
-            });
-            saveLeetcode(0, false);
-            supabaseUpsertTimerState(getTodayString(), 0, 0, 0, 0).catch(() => {});
-            return 0;
-          }
-          return next;
-        });
+        const elapsed = Math.floor((Date.now() - lcStartedAt.current) / 1000);
+        const next = lcBaseRemaining.current - elapsed;
+        if (next <= 0) {
+          setLcRunning(false);
+          setLcRemaining(0);
+          setCompletedDates((dates) => {
+            const updated = new Set(dates);
+            const today = getTodayString();
+            updated.add(today);
+            saveCompletedDates(updated);
+            supabaseInsertCompleted(today).catch(() => {});
+            return updated;
+          });
+          saveLeetcode(0, false);
+          supabaseUpsertTimerState(getTodayString(), 0, 0, 0, 0).catch(() => {});
+        } else {
+          setLcRemaining(next);
+        }
       }, 1000);
     } else if (lcInterval.current) {
       clearInterval(lcInterval.current);
@@ -302,6 +312,7 @@ export default function Home() {
     return () => {
       if (lcInterval.current) clearInterval(lcInterval.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lcRunning, saveLeetcode]);
 
   // Save leetcode state when remaining changes
@@ -315,8 +326,11 @@ export default function Home() {
   // ── Project timer tick ──
   useEffect(() => {
     if (projRunning) {
+      projStartedAt.current = Date.now();
+      projBaseElapsed.current = projElapsed;
       projInterval.current = setInterval(() => {
-        setProjElapsed((prev) => prev + 1);
+        const delta = Math.floor((Date.now() - projStartedAt.current) / 1000);
+        setProjElapsed(projBaseElapsed.current + delta);
       }, 1000);
     } else if (projInterval.current) {
       clearInterval(projInterval.current);
@@ -324,6 +338,7 @@ export default function Home() {
     return () => {
       if (projInterval.current) clearInterval(projInterval.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projRunning]);
 
   // Save project state when elapsed changes
@@ -337,8 +352,11 @@ export default function Home() {
   // ── Study timer tick ──
   useEffect(() => {
     if (studyRunning) {
+      studyStartedAt.current = Date.now();
+      studyBaseElapsed.current = studyElapsed;
       studyInterval.current = setInterval(() => {
-        setStudyElapsed((prev) => prev + 1);
+        const delta = Math.floor((Date.now() - studyStartedAt.current) / 1000);
+        setStudyElapsed(studyBaseElapsed.current + delta);
       }, 1000);
     } else if (studyInterval.current) {
       clearInterval(studyInterval.current);
@@ -346,6 +364,7 @@ export default function Home() {
     return () => {
       if (studyInterval.current) clearInterval(studyInterval.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyRunning]);
 
   // Save study state when elapsed changes
@@ -359,8 +378,11 @@ export default function Home() {
   // ── Application timer tick ──
   useEffect(() => {
     if (appRunning) {
+      appStartedAt.current = Date.now();
+      appBaseElapsed.current = appElapsed;
       appInterval.current = setInterval(() => {
-        setAppElapsed((prev) => prev + 1);
+        const delta = Math.floor((Date.now() - appStartedAt.current) / 1000);
+        setAppElapsed(appBaseElapsed.current + delta);
       }, 1000);
     } else if (appInterval.current) {
       clearInterval(appInterval.current);
@@ -368,6 +390,7 @@ export default function Home() {
     return () => {
       if (appInterval.current) clearInterval(appInterval.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appRunning]);
 
   // Save application state when elapsed changes
@@ -377,6 +400,33 @@ export default function Home() {
       saveToSupabase(lcRemaining, projElapsed, studyElapsed, appElapsed);
     }
   }, [appElapsed, appRunning, mounted, saveStopwatch, saveToSupabase, lcRemaining, projElapsed, studyElapsed]);
+
+  // ── Re-sync timers when tab becomes visible again ──
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (lcRunning && lcStartedAt.current) {
+        const elapsed = Math.floor((Date.now() - lcStartedAt.current) / 1000);
+        const next = lcBaseRemaining.current - elapsed;
+        setLcRemaining(next <= 0 ? 0 : next);
+        if (next <= 0) setLcRunning(false);
+      }
+      if (projRunning && projStartedAt.current) {
+        const delta = Math.floor((Date.now() - projStartedAt.current) / 1000);
+        setProjElapsed(projBaseElapsed.current + delta);
+      }
+      if (studyRunning && studyStartedAt.current) {
+        const delta = Math.floor((Date.now() - studyStartedAt.current) / 1000);
+        setStudyElapsed(studyBaseElapsed.current + delta);
+      }
+      if (appRunning && appStartedAt.current) {
+        const delta = Math.floor((Date.now() - appStartedAt.current) / 1000);
+        setAppElapsed(appBaseElapsed.current + delta);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [lcRunning, projRunning, studyRunning, appRunning]);
 
   // ── Password Gate ──
   if (!isAuthenticated) {
