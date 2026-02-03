@@ -1,289 +1,430 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
 
-interface StudySession {
-  id: string;
-  duration: number;
-  date: string;
-  label: string;
+const SITE_PASSWORD = 'timer';
+const LEETCODE_TOTAL_SECONDS = 2 * 60 * 60; // 2 hours
+const SUPABASE_SAVE_INTERVAL = 5000; // 5 seconds
+
+function getTodayString(): string {
+  return new Date().toISOString().split('T')[0];
 }
 
 function formatTime(seconds: number): string {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
-
-  if (hrs > 0) {
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-function formatDuration(seconds: number): string {
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-
-  if (hrs > 0 && mins > 0) {
-    return `${hrs}h ${mins}m`;
-  } else if (hrs > 0) {
-    return `${hrs}h`;
-  } else if (mins > 0) {
-    return `${mins}m`;
-  }
-  return `${seconds}s`;
+interface LeetcodeState {
+  remainingSeconds: number;
+  isRunning: boolean;
+  lastDate: string;
 }
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+interface ProjectState {
+  elapsedSeconds: number;
+  isRunning: boolean;
+  lastDate: string;
 }
+
+function loadLeetcodeState(): LeetcodeState {
+  try {
+    const raw = localStorage.getItem('leetcodeState');
+    if (raw) {
+      const parsed = JSON.parse(raw) as LeetcodeState;
+      if (parsed.lastDate === getTodayString()) {
+        return { ...parsed, isRunning: false };
+      }
+    }
+  } catch {}
+  return { remainingSeconds: LEETCODE_TOTAL_SECONDS, isRunning: false, lastDate: getTodayString() };
+}
+
+function loadProjectState(): ProjectState {
+  try {
+    const raw = localStorage.getItem('projectState');
+    if (raw) {
+      const parsed = JSON.parse(raw) as ProjectState;
+      if (parsed.lastDate === getTodayString()) {
+        return { ...parsed, isRunning: false };
+      }
+    }
+  } catch {}
+  return { elapsedSeconds: 0, isRunning: false, lastDate: getTodayString() };
+}
+
+function loadCompletedDates(): Set<string> {
+  try {
+    const raw = localStorage.getItem('leetcodeCompletedDates');
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {}
+  return new Set();
+}
+
+function saveCompletedDates(dates: Set<string>) {
+  localStorage.setItem('leetcodeCompletedDates', JSON.stringify([...dates]));
+}
+
+// ─── Supabase helpers ───
+
+async function supabaseFetchTimerState(date: string) {
+  const { data } = await supabase
+    .from('timer_state')
+    .select('*')
+    .eq('date', date)
+    .single();
+  return data as { date: string; leetcode_remaining_seconds: number; project_elapsed_seconds: number } | null;
+}
+
+async function supabaseUpsertTimerState(date: string, leetcodeRemaining: number, projectElapsed: number) {
+  await supabase
+    .from('timer_state')
+    .upsert({
+      date,
+      leetcode_remaining_seconds: leetcodeRemaining,
+      project_elapsed_seconds: projectElapsed,
+    });
+}
+
+async function supabaseInsertCompleted(date: string) {
+  await supabase
+    .from('completed_dates')
+    .upsert({ date });
+}
+
+async function supabaseFetchCompletedDates(): Promise<string[]> {
+  const { data } = await supabase
+    .from('completed_dates')
+    .select('date');
+  return (data ?? []).map((r: { date: string }) => r.date);
+}
+
+// ─── Calendar Component ───
+
+function Calendar({ completedDates }: { completedDates: Set<string> }) {
+  const [viewDate, setViewDate] = useState(() => new Date());
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const monthName = viewDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
+
+  const today = getTodayString();
+
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div className="glass-card p-4 w-full">
+      <div className="flex items-center justify-between mb-3">
+        <button onClick={prevMonth} className="glass-button px-2 py-1 text-xs">&larr;</button>
+        <h3 className="text-white/90 font-semibold text-sm">{monthName}</h3>
+        <button onClick={nextMonth} className="glass-button px-2 py-1 text-xs">&rarr;</button>
+      </div>
+      <div className="calendar-grid">
+        {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d) => (
+          <div key={d} className="calendar-header">{d}</div>
+        ))}
+        {cells.map((day, i) => {
+          if (day === null) return <div key={`empty-${i}`} />;
+          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const isCompleted = completedDates.has(dateStr);
+          const isToday = dateStr === today;
+          return (
+            <div
+              key={dateStr}
+              className={`calendar-day${isCompleted ? ' calendar-day-completed' : ''}${isToday ? ' calendar-day-today' : ''}`}
+            >
+              {day}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Component ───
 
 export default function Home() {
-  const [time, setTime] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [sessions, setSessions] = useState<StudySession[]>([]);
-  const [sessionLabel, setSessionLabel] = useState('');
-  const [showLabelInput, setShowLabelInput] = useState(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState(false);
 
-  // Load sessions from localStorage on mount
+  // Leetcode countdown
+  const [lcRemaining, setLcRemaining] = useState(LEETCODE_TOTAL_SECONDS);
+  const [lcRunning, setLcRunning] = useState(false);
+  const lcInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Project stopwatch
+  const [projElapsed, setProjElapsed] = useState(0);
+  const [projRunning, setProjRunning] = useState(false);
+  const projInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Calendar
+  const [completedDates, setCompletedDates] = useState<Set<string>>(new Set());
+
+  // Hydration guard
+  const [mounted, setMounted] = useState(false);
+
+  // Supabase debounce ref
+  const lastSupabaseSave = useRef(0);
+
+  // ── Auth ──
   useEffect(() => {
-    const stored = localStorage.getItem('studySessions');
-    if (stored) {
-      setSessions(JSON.parse(stored));
+    if (sessionStorage.getItem('authenticated') === 'true') {
+      setIsAuthenticated(true);
     }
   }, []);
 
-  // Save sessions to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('studySessions', JSON.stringify(sessions));
-  }, [sessions]);
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === SITE_PASSWORD) {
+      sessionStorage.setItem('authenticated', 'true');
+      setIsAuthenticated(true);
+      setPasswordError(false);
+    } else {
+      setPasswordError(true);
+    }
+  };
 
-  // Timer logic
+  // ── Load state from localStorage first, then sync with Supabase ──
   useEffect(() => {
-    if (isRunning) {
-      intervalRef.current = setInterval(() => {
-        setTime((t) => t + 1);
+    const lc = loadLeetcodeState();
+    setLcRemaining(lc.remainingSeconds);
+
+    const proj = loadProjectState();
+    setProjElapsed(proj.elapsedSeconds);
+
+    const localDates = loadCompletedDates();
+    setCompletedDates(localDates);
+    setMounted(true);
+
+    // Sync from Supabase in background
+    const today = getTodayString();
+    supabaseFetchTimerState(today).then((row) => {
+      if (row) {
+        setLcRemaining(row.leetcode_remaining_seconds);
+        setProjElapsed(row.project_elapsed_seconds);
+      }
+    }).catch(() => {});
+
+    supabaseFetchCompletedDates().then((dates) => {
+      if (dates.length > 0) {
+        setCompletedDates((prev) => {
+          const merged = new Set(prev);
+          dates.forEach((d) => merged.add(d));
+          saveCompletedDates(merged);
+          return merged;
+        });
+      }
+    }).catch(() => {});
+  }, []);
+
+  // ── Persist leetcode state ──
+  const saveLeetcode = useCallback((remaining: number, running: boolean) => {
+    const state: LeetcodeState = { remainingSeconds: remaining, isRunning: running, lastDate: getTodayString() };
+    localStorage.setItem('leetcodeState', JSON.stringify(state));
+  }, []);
+
+  // ── Persist project state ──
+  const saveProject = useCallback((elapsed: number, running: boolean) => {
+    const state: ProjectState = { elapsedSeconds: elapsed, isRunning: running, lastDate: getTodayString() };
+    localStorage.setItem('projectState', JSON.stringify(state));
+  }, []);
+
+  // ── Debounced Supabase save ──
+  const saveToSupabase = useCallback((lcRem: number, projEl: number) => {
+    const now = Date.now();
+    if (now - lastSupabaseSave.current >= SUPABASE_SAVE_INTERVAL) {
+      lastSupabaseSave.current = now;
+      supabaseUpsertTimerState(getTodayString(), lcRem, projEl).catch(() => {});
+    }
+  }, []);
+
+  // ── Leetcode timer tick ──
+  useEffect(() => {
+    if (lcRunning) {
+      lcInterval.current = setInterval(() => {
+        setLcRemaining((prev) => {
+          const next = prev - 1;
+          if (next <= 0) {
+            setLcRunning(false);
+            setCompletedDates((dates) => {
+              const updated = new Set(dates);
+              const today = getTodayString();
+              updated.add(today);
+              saveCompletedDates(updated);
+              supabaseInsertCompleted(today).catch(() => {});
+              return updated;
+            });
+            saveLeetcode(0, false);
+            supabaseUpsertTimerState(getTodayString(), 0, 0).catch(() => {});
+            return 0;
+          }
+          return next;
+        });
       }, 1000);
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+    } else if (lcInterval.current) {
+      clearInterval(lcInterval.current);
     }
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      if (lcInterval.current) clearInterval(lcInterval.current);
     };
-  }, [isRunning]);
+  }, [lcRunning, saveLeetcode]);
 
-  // Focus input when showing label input
+  // Save leetcode state when remaining changes
   useEffect(() => {
-    if (showLabelInput && inputRef.current) {
-      inputRef.current.focus();
+    if (mounted) {
+      saveLeetcode(lcRemaining, lcRunning);
+      saveToSupabase(lcRemaining, projElapsed);
     }
-  }, [showLabelInput]);
+  }, [lcRemaining, lcRunning, mounted, saveLeetcode, saveToSupabase, projElapsed]);
 
-  const handleStart = () => {
-    setIsRunning(true);
-  };
-
-  const handlePause = () => {
-    setIsRunning(false);
-  };
-
-  const handleStop = () => {
-    if (time > 0) {
-      setIsRunning(false);
-      setShowLabelInput(true);
+  // ── Project timer tick ──
+  useEffect(() => {
+    if (projRunning) {
+      projInterval.current = setInterval(() => {
+        setProjElapsed((prev) => prev + 1);
+      }, 1000);
+    } else if (projInterval.current) {
+      clearInterval(projInterval.current);
     }
-  };
+    return () => {
+      if (projInterval.current) clearInterval(projInterval.current);
+    };
+  }, [projRunning]);
 
-  const handleSaveSession = useCallback(() => {
-    if (time > 0) {
-      const newSession: StudySession = {
-        id: Date.now().toString(),
-        duration: time,
-        date: new Date().toISOString(),
-        label: sessionLabel.trim() || 'Study Session',
-      };
-      setSessions((prev) => [...prev, newSession].sort((a, b) => b.duration - a.duration));
-      setTime(0);
-      setSessionLabel('');
-      setShowLabelInput(false);
+  // Save project state when elapsed changes
+  useEffect(() => {
+    if (mounted) {
+      saveProject(projElapsed, projRunning);
+      saveToSupabase(lcRemaining, projElapsed);
     }
-  }, [time, sessionLabel]);
+  }, [projElapsed, projRunning, mounted, saveProject, saveToSupabase, lcRemaining]);
 
-  const handleDiscardSession = () => {
-    setTime(0);
-    setSessionLabel('');
-    setShowLabelInput(false);
-  };
-
-  const handleDeleteSession = (id: string) => {
-    setSessions((prev) => prev.filter((s) => s.id !== id));
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSaveSession();
-    } else if (e.key === 'Escape') {
-      handleDiscardSession();
-    }
-  };
-
-  const getRankClass = (index: number): string => {
-    if (index === 0) return 'rank-1';
-    if (index === 1) return 'rank-2';
-    if (index === 2) return 'rank-3';
-    return 'rank-default';
-  };
-
-  return (
-    <main className="relative z-10 min-h-screen flex flex-col items-center justify-center p-6 gap-8">
-      {/* Header */}
-      <div className="text-center mb-4">
-        <h1 className="text-4xl font-bold text-white/90 tracking-tight mb-2">
-          Study Timer
-        </h1>
-        <p className="text-white/50 text-sm">
-          Track your focus, build your streak
-        </p>
-      </div>
-
-      {/* Timer Card */}
-      <div className={`glass-card-strong p-10 relative ${isRunning ? 'timer-active' : ''}`}>
-        <div className="timer-display text-7xl md:text-8xl font-light text-white text-center tracking-wider">
-          {formatTime(time)}
-        </div>
-      </div>
-
-      {/* Controls */}
-      {!showLabelInput ? (
-        <div className="flex gap-4">
-          {!isRunning ? (
-            <button
-              onClick={handleStart}
-              className="glass-button glass-button-success px-8 py-4 text-lg"
-            >
-              {time > 0 ? 'Resume' : 'Start'}
-            </button>
-          ) : (
-            <button
-              onClick={handlePause}
-              className="glass-button glass-button-primary px-8 py-4 text-lg"
-            >
-              Pause
-            </button>
-          )}
-          {(time > 0 || isRunning) && (
-            <button
-              onClick={handleStop}
-              className="glass-button glass-button-danger px-8 py-4 text-lg"
-            >
-              Stop
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="glass-card p-6 w-full max-w-md">
-          <p className="text-white/70 text-sm mb-3 text-center">
-            Session completed: {formatDuration(time)}
-          </p>
-          <input
-            ref={inputRef}
-            type="text"
-            value={sessionLabel}
-            onChange={(e) => setSessionLabel(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="What were you studying?"
-            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:border-white/30 transition-colors mb-4"
-          />
-          <div className="flex gap-3">
-            <button
-              onClick={handleSaveSession}
-              className="flex-1 glass-button glass-button-success px-4 py-3"
-            >
-              Save
-            </button>
-            <button
-              onClick={handleDiscardSession}
-              className="flex-1 glass-button px-4 py-3"
-            >
-              Discard
-            </button>
+  // ── Password Gate ──
+  if (!isAuthenticated) {
+    return (
+      <main className="relative z-10 min-h-screen flex flex-col items-center justify-center p-6">
+        <div className="glass-card-strong p-12 w-full max-w-sm text-center">
+          <div className="mb-8">
+            <div className="w-16 h-16 mx-auto mb-5 rounded-2xl bg-white/10 border border-white/10 flex items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+              </svg>
+            </div>
+            <h1 className="text-2xl font-semibold text-white/90 tracking-wide mb-1">Assistant</h1>
+            <p className="text-white/40 text-sm tracking-wide">Enter password to continue</p>
           </div>
+          <form onSubmit={handlePasswordSubmit} className="space-y-5">
+            <div>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
+                placeholder="Password"
+                autoFocus
+                className={`w-full bg-white/5 border ${passwordError ? 'border-red-400/50' : 'border-white/10'} rounded-xl px-4 py-3 text-white text-center tracking-widest placeholder-white/30 focus:outline-none focus:border-white/30 transition-colors`}
+              />
+              {passwordError && (
+                <p className="text-red-400/80 text-xs mt-2 tracking-wide">Incorrect password. Try again.</p>
+              )}
+            </div>
+            <button type="submit" className="w-full glass-button glass-button-primary px-4 py-3 tracking-wide">Unlock</button>
+          </form>
         </div>
-      )}
+      </main>
+    );
+  }
 
-      {/* Leaderboard */}
-      {sessions.length > 0 && (
-        <div className="glass-card p-6 w-full max-w-lg mt-4">
-          <h2 className="text-xl font-semibold text-white/90 mb-4 flex items-center gap-2">
-            <span className="text-2xl">🏆</span> Leaderboard
-          </h2>
-          <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
-            {sessions.map((session, index) => (
-              <div
-                key={session.id}
-                className="leaderboard-item p-4 flex items-center gap-4 group"
-              >
-                <div className={`rank-badge ${getRankClass(index)}`}>
-                  {index + 1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-white/90 font-medium truncate">
-                    {session.label}
-                  </p>
-                  <p className="text-white/40 text-sm">
-                    {formatDate(session.date)}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-white/90 font-mono text-lg">
-                    {formatDuration(session.duration)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDeleteSession(session.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-white/30 hover:text-red-400 p-1"
-                  title="Delete session"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
+  // ── Main UI — Two-column layout ──
+  return (
+    <main className="relative z-10 min-h-screen flex flex-col items-center p-6 gap-6">
+      {/* Header */}
+      <div className="text-center mt-8 mb-2">
+        <h1 className="text-4xl font-bold text-white/90 tracking-tight">Assistant</h1>
+      </div>
+
+      {/* Two-column layout: timers left, calendar right */}
+      <div className="main-layout w-full max-w-5xl">
+        {/* Left column — Timers */}
+        <div className="timers-column flex flex-col gap-6">
+          {/* Timer Cards side by side */}
+          <div className="flex flex-col sm:flex-row gap-6">
+            {/* Leetcode Countdown */}
+            <div className={`glass-card-strong p-8 flex-1 text-center${lcRunning ? ' timer-active' : ''} relative`}>
+              <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Leetcode</h2>
+              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+                {mounted ? formatTime(lcRemaining) : formatTime(LEETCODE_TOTAL_SECONDS)}
+              </div>
+              <div className="flex gap-3 justify-center">
+                {!lcRunning ? (
+                  <button
+                    onClick={() => { if (lcRemaining > 0) setLcRunning(true); }}
+                    disabled={lcRemaining <= 0}
+                    className="glass-button glass-button-success px-6 py-3"
                   >
-                    <path
-                      fillRule="evenodd"
-                      d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
+                    {lcRemaining < LEETCODE_TOTAL_SECONDS && lcRemaining > 0 ? 'Resume' : 'Start'}
+                  </button>
+                ) : (
+                  <button onClick={() => setLcRunning(false)} className="glass-button glass-button-primary px-6 py-3">
+                    Pause
+                  </button>
+                )}
+                <button
+                  onClick={() => { setLcRunning(false); setLcRemaining(LEETCODE_TOTAL_SECONDS); }}
+                  className="glass-button px-6 py-3"
+                >
+                  Reset
                 </button>
               </div>
-            ))}
+              {lcRemaining <= 0 && (
+                <p className="text-green-400/80 text-sm mt-3 font-medium">Completed!</p>
+              )}
+            </div>
+
+            {/* Project Stopwatch */}
+            <div className={`glass-card-strong p-8 flex-1 text-center${projRunning ? ' timer-active' : ''} relative`}>
+              <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Project</h2>
+              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+                {mounted ? formatTime(projElapsed) : formatTime(0)}
+              </div>
+              <div className="flex gap-3 justify-center">
+                {!projRunning ? (
+                  <button onClick={() => setProjRunning(true)} className="glass-button glass-button-success px-6 py-3">
+                    {projElapsed > 0 ? 'Resume' : 'Start'}
+                  </button>
+                ) : (
+                  <button onClick={() => setProjRunning(false)} className="glass-button glass-button-primary px-6 py-3">
+                    Pause
+                  </button>
+                )}
+                <button
+                  onClick={() => { setProjRunning(false); setProjElapsed(0); }}
+                  className="glass-button px-6 py-3"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Empty state */}
-      {sessions.length === 0 && (
-        <div className="glass-card p-8 w-full max-w-lg text-center mt-4">
-          <div className="text-4xl mb-3">📚</div>
-          <p className="text-white/50">
-            Start your first study session to see your leaderboard!
-          </p>
+        {/* Right column — Calendar */}
+        <div className="calendar-column">
+          <Calendar completedDates={completedDates} />
         </div>
-      )}
+      </div>
     </main>
   );
 }
