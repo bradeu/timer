@@ -24,7 +24,7 @@ interface LeetcodeState {
   lastDate: string;
 }
 
-interface ProjectState {
+interface StopwatchState {
   elapsedSeconds: number;
   isRunning: boolean;
   lastDate: string;
@@ -43,11 +43,11 @@ function loadLeetcodeState(): LeetcodeState {
   return { remainingSeconds: LEETCODE_TOTAL_SECONDS, isRunning: false, lastDate: getTodayString() };
 }
 
-function loadProjectState(): ProjectState {
+function loadStopwatchState(key: string): StopwatchState {
   try {
-    const raw = localStorage.getItem('projectState');
+    const raw = localStorage.getItem(key);
     if (raw) {
-      const parsed = JSON.parse(raw) as ProjectState;
+      const parsed = JSON.parse(raw) as StopwatchState;
       if (parsed.lastDate === getTodayString()) {
         return { ...parsed, isRunning: false };
       }
@@ -76,16 +76,18 @@ async function supabaseFetchTimerState(date: string) {
     .select('*')
     .eq('date', date)
     .single();
-  return data as { date: string; leetcode_remaining_seconds: number; project_elapsed_seconds: number } | null;
+  return data as { date: string; leetcode_remaining_seconds: number; project_elapsed_seconds: number; study_elapsed_seconds: number; app_elapsed_seconds: number } | null;
 }
 
-async function supabaseUpsertTimerState(date: string, leetcodeRemaining: number, projectElapsed: number) {
+async function supabaseUpsertTimerState(date: string, leetcodeRemaining: number, projectElapsed: number, studyElapsed: number, appElapsed: number) {
   await supabase
     .from('timer_state')
     .upsert({
       date,
       leetcode_remaining_seconds: leetcodeRemaining,
       project_elapsed_seconds: projectElapsed,
+      study_elapsed_seconds: studyElapsed,
+      app_elapsed_seconds: appElapsed,
     });
 }
 
@@ -170,6 +172,16 @@ export default function Home() {
   const [projRunning, setProjRunning] = useState(false);
   const projInterval = useRef<NodeJS.Timeout | null>(null);
 
+  // Study stopwatch
+  const [studyElapsed, setStudyElapsed] = useState(0);
+  const [studyRunning, setStudyRunning] = useState(false);
+  const studyInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Application stopwatch
+  const [appElapsed, setAppElapsed] = useState(0);
+  const [appRunning, setAppRunning] = useState(false);
+  const appInterval = useRef<NodeJS.Timeout | null>(null);
+
   // Calendar
   const [completedDates, setCompletedDates] = useState<Set<string>>(new Set());
 
@@ -202,8 +214,14 @@ export default function Home() {
     const lc = loadLeetcodeState();
     setLcRemaining(lc.remainingSeconds);
 
-    const proj = loadProjectState();
+    const proj = loadStopwatchState('projectState');
     setProjElapsed(proj.elapsedSeconds);
+
+    const study = loadStopwatchState('studyState');
+    setStudyElapsed(study.elapsedSeconds);
+
+    const app = loadStopwatchState('appState');
+    setAppElapsed(app.elapsedSeconds);
 
     const localDates = loadCompletedDates();
     setCompletedDates(localDates);
@@ -215,6 +233,8 @@ export default function Home() {
       if (row) {
         setLcRemaining(row.leetcode_remaining_seconds);
         setProjElapsed(row.project_elapsed_seconds);
+        setStudyElapsed(row.study_elapsed_seconds ?? 0);
+        setAppElapsed(row.app_elapsed_seconds ?? 0);
       }
     }).catch(() => {});
 
@@ -236,18 +256,18 @@ export default function Home() {
     localStorage.setItem('leetcodeState', JSON.stringify(state));
   }, []);
 
-  // ── Persist project state ──
-  const saveProject = useCallback((elapsed: number, running: boolean) => {
-    const state: ProjectState = { elapsedSeconds: elapsed, isRunning: running, lastDate: getTodayString() };
-    localStorage.setItem('projectState', JSON.stringify(state));
+  // ── Persist stopwatch state ──
+  const saveStopwatch = useCallback((key: string, elapsed: number, running: boolean) => {
+    const state: StopwatchState = { elapsedSeconds: elapsed, isRunning: running, lastDate: getTodayString() };
+    localStorage.setItem(key, JSON.stringify(state));
   }, []);
 
   // ── Debounced Supabase save ──
-  const saveToSupabase = useCallback((lcRem: number, projEl: number) => {
+  const saveToSupabase = useCallback((lcRem: number, projEl: number, studyEl: number, appEl: number) => {
     const now = Date.now();
     if (now - lastSupabaseSave.current >= SUPABASE_SAVE_INTERVAL) {
       lastSupabaseSave.current = now;
-      supabaseUpsertTimerState(getTodayString(), lcRem, projEl).catch(() => {});
+      supabaseUpsertTimerState(getTodayString(), lcRem, projEl, studyEl, appEl).catch(() => {});
     }
   }, []);
 
@@ -268,7 +288,7 @@ export default function Home() {
               return updated;
             });
             saveLeetcode(0, false);
-            supabaseUpsertTimerState(getTodayString(), 0, 0).catch(() => {});
+            supabaseUpsertTimerState(getTodayString(), 0, 0, 0, 0).catch(() => {});
             return 0;
           }
           return next;
@@ -286,9 +306,9 @@ export default function Home() {
   useEffect(() => {
     if (mounted) {
       saveLeetcode(lcRemaining, lcRunning);
-      saveToSupabase(lcRemaining, projElapsed);
+      saveToSupabase(lcRemaining, projElapsed, studyElapsed, appElapsed);
     }
-  }, [lcRemaining, lcRunning, mounted, saveLeetcode, saveToSupabase, projElapsed]);
+  }, [lcRemaining, lcRunning, mounted, saveLeetcode, saveToSupabase, projElapsed, studyElapsed, appElapsed]);
 
   // ── Project timer tick ──
   useEffect(() => {
@@ -307,10 +327,54 @@ export default function Home() {
   // Save project state when elapsed changes
   useEffect(() => {
     if (mounted) {
-      saveProject(projElapsed, projRunning);
-      saveToSupabase(lcRemaining, projElapsed);
+      saveStopwatch('projectState', projElapsed, projRunning);
+      saveToSupabase(lcRemaining, projElapsed, studyElapsed, appElapsed);
     }
-  }, [projElapsed, projRunning, mounted, saveProject, saveToSupabase, lcRemaining]);
+  }, [projElapsed, projRunning, mounted, saveStopwatch, saveToSupabase, lcRemaining, studyElapsed, appElapsed]);
+
+  // ── Study timer tick ──
+  useEffect(() => {
+    if (studyRunning) {
+      studyInterval.current = setInterval(() => {
+        setStudyElapsed((prev) => prev + 1);
+      }, 1000);
+    } else if (studyInterval.current) {
+      clearInterval(studyInterval.current);
+    }
+    return () => {
+      if (studyInterval.current) clearInterval(studyInterval.current);
+    };
+  }, [studyRunning]);
+
+  // Save study state when elapsed changes
+  useEffect(() => {
+    if (mounted) {
+      saveStopwatch('studyState', studyElapsed, studyRunning);
+      saveToSupabase(lcRemaining, projElapsed, studyElapsed, appElapsed);
+    }
+  }, [studyElapsed, studyRunning, mounted, saveStopwatch, saveToSupabase, lcRemaining, projElapsed, appElapsed]);
+
+  // ── Application timer tick ──
+  useEffect(() => {
+    if (appRunning) {
+      appInterval.current = setInterval(() => {
+        setAppElapsed((prev) => prev + 1);
+      }, 1000);
+    } else if (appInterval.current) {
+      clearInterval(appInterval.current);
+    }
+    return () => {
+      if (appInterval.current) clearInterval(appInterval.current);
+    };
+  }, [appRunning]);
+
+  // Save application state when elapsed changes
+  useEffect(() => {
+    if (mounted) {
+      saveStopwatch('appState', appElapsed, appRunning);
+      saveToSupabase(lcRemaining, projElapsed, studyElapsed, appElapsed);
+    }
+  }, [appElapsed, appRunning, mounted, saveStopwatch, saveToSupabase, lcRemaining, projElapsed, studyElapsed]);
 
   // ── Password Gate ──
   if (!isAuthenticated) {
@@ -359,10 +423,10 @@ export default function Home() {
       <div className="main-layout w-full max-w-5xl">
         {/* Left column — Timers */}
         <div className="timers-column flex flex-col gap-6">
-          {/* Timer Cards side by side */}
-          <div className="flex flex-col sm:flex-row gap-6">
+          {/* Timer Cards in grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {/* Leetcode Countdown */}
-            <div className={`glass-card-strong p-8 flex-1 text-center${lcRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center${lcRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Leetcode</h2>
               <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
                 {mounted ? formatTime(lcRemaining) : formatTime(LEETCODE_TOTAL_SECONDS)}
@@ -394,7 +458,7 @@ export default function Home() {
             </div>
 
             {/* Project Stopwatch */}
-            <div className={`glass-card-strong p-8 flex-1 text-center${projRunning ? ' timer-active' : ''} relative`}>
+            <div className={`glass-card-strong p-8 text-center${projRunning ? ' timer-active' : ''} relative`}>
               <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Project</h2>
               <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
                 {mounted ? formatTime(projElapsed) : formatTime(0)}
@@ -411,6 +475,56 @@ export default function Home() {
                 )}
                 <button
                   onClick={() => { setProjRunning(false); setProjElapsed(0); }}
+                  className="glass-button px-6 py-3"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            {/* Study Stopwatch */}
+            <div className={`glass-card-strong p-8 text-center${studyRunning ? ' timer-active' : ''} relative`}>
+              <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Study</h2>
+              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+                {mounted ? formatTime(studyElapsed) : formatTime(0)}
+              </div>
+              <div className="flex gap-3 justify-center">
+                {!studyRunning ? (
+                  <button onClick={() => setStudyRunning(true)} className="glass-button glass-button-success px-6 py-3">
+                    {studyElapsed > 0 ? 'Resume' : 'Start'}
+                  </button>
+                ) : (
+                  <button onClick={() => setStudyRunning(false)} className="glass-button glass-button-primary px-6 py-3">
+                    Pause
+                  </button>
+                )}
+                <button
+                  onClick={() => { setStudyRunning(false); setStudyElapsed(0); }}
+                  className="glass-button px-6 py-3"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            {/* Application Stopwatch */}
+            <div className={`glass-card-strong p-8 text-center${appRunning ? ' timer-active' : ''} relative`}>
+              <h2 className="text-white/60 text-sm font-semibold uppercase tracking-widest mb-4">Application</h2>
+              <div className="timer-display text-5xl md:text-6xl font-light text-white mb-6">
+                {mounted ? formatTime(appElapsed) : formatTime(0)}
+              </div>
+              <div className="flex gap-3 justify-center">
+                {!appRunning ? (
+                  <button onClick={() => setAppRunning(true)} className="glass-button glass-button-success px-6 py-3">
+                    {appElapsed > 0 ? 'Resume' : 'Start'}
+                  </button>
+                ) : (
+                  <button onClick={() => setAppRunning(false)} className="glass-button glass-button-primary px-6 py-3">
+                    Pause
+                  </button>
+                )}
+                <button
+                  onClick={() => { setAppRunning(false); setAppElapsed(0); }}
                   className="glass-button px-6 py-3"
                 >
                   Reset
