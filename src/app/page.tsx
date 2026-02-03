@@ -80,7 +80,7 @@ async function supabaseFetchTimerState(date: string) {
 }
 
 async function supabaseUpsertTimerState(date: string, leetcodeRemaining: number, projectElapsed: number, studyElapsed: number, appElapsed: number) {
-  await supabase
+  const { error } = await supabase
     .from('timer_state')
     .upsert({
       date,
@@ -88,13 +88,15 @@ async function supabaseUpsertTimerState(date: string, leetcodeRemaining: number,
       project_elapsed_seconds: projectElapsed,
       study_elapsed_seconds: studyElapsed,
       app_elapsed_seconds: appElapsed,
-    });
+    }, { onConflict: 'date' });
+  if (error) console.error('supabase upsert error:', error);
 }
 
 async function supabaseInsertCompleted(date: string) {
-  await supabase
+  const { error } = await supabase
     .from('completed_dates')
-    .upsert({ date });
+    .upsert({ date }, { onConflict: 'date' });
+  if (error) console.error('supabase completed upsert error:', error);
 }
 
 async function supabaseFetchCompletedDates(): Promise<string[]> {
