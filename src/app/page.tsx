@@ -8,7 +8,8 @@ const LEETCODE_TOTAL_SECONDS = 2 * 60 * 60; // 2 hours
 const SUPABASE_SAVE_INTERVAL = 5000; // 5 seconds
 
 function getTodayString(): string {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function formatTime(seconds: number): string {
