@@ -111,6 +111,11 @@ async function supabaseFetchCompletedDates(): Promise<string[]> {
 
 function Calendar({ completedDates }: { completedDates: Set<string> }) {
   const [viewDate, setViewDate] = useState(() => new Date());
+  const [today, setToday] = useState('');
+
+  useEffect(() => {
+    setToday(getTodayString());
+  }, []);
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
@@ -121,8 +126,6 @@ function Calendar({ completedDates }: { completedDates: Set<string> }) {
 
   const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
   const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
-
-  const today = getTodayString();
 
   const cells: (number | null)[] = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
