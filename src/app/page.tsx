@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 
 const SITE_PASSWORD = 'timer';
@@ -117,7 +117,15 @@ async function supabaseFetchCompletedDates(): Promise<string[]> {
 
 // ─── Daily Chart Component ───
 
+function formatHoursMinutes(totalHours: number): string {
+  const h = Math.floor(totalHours);
+  const m = Math.round((totalHours - h) * 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 function DailyChart({ data }: { data: { date: string; totalHours: number }[] }) {
+  const [hovered, setHovered] = useState<number | null>(null);
+
   if (data.length === 0) return null;
 
   const W = 500;
@@ -149,6 +157,8 @@ function DailyChart({ data }: { data: { date: string; totalHours: number }[] }) 
     yTicks.push({ val, y });
   }
 
+  const hp = hovered !== null ? points[hovered] : null;
+
   return (
     <div className="glass-card p-4 w-full mt-4">
       <h3 className="text-white/60 text-xs font-semibold uppercase tracking-widest mb-3 text-center">Daily Hours (Last 14 Days)</h3>
@@ -172,15 +182,35 @@ function DailyChart({ data }: { data: { date: string; totalHours: number }[] }) 
         <path d={areaPath} fill="url(#areaGrad)" />
         {/* Line */}
         <path d={linePath} fill="none" stroke="rgba(79,172,254,0.8)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-        {/* Dots */}
-        {points.map((p) => (
-          <circle key={p.date} cx={p.x} cy={p.y} r={3} fill="#4facfe" stroke="rgba(255,255,255,0.3)" strokeWidth={1} />
+        {/* Dots + invisible hover targets */}
+        {points.map((p, i) => (
+          <g key={p.date} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
+            <circle cx={p.x} cy={p.y} r={12} fill="transparent" />
+            <circle cx={p.x} cy={p.y} r={hovered === i ? 5 : 3} fill="#4facfe" stroke="rgba(255,255,255,0.3)" strokeWidth={1} style={{ transition: 'r 0.15s ease' }} />
+          </g>
         ))}
+        {/* Tooltip */}
+        {hp && (
+          <g>
+            <rect
+              x={hp.x - 40}
+              y={hp.y - 32}
+              width={80}
+              height={22}
+              rx={6}
+              fill="rgba(0,0,0,0.7)"
+              stroke="rgba(79,172,254,0.5)"
+              strokeWidth={1}
+            />
+            <text x={hp.x} y={hp.y - 17} textAnchor="middle" fill="white" fontSize={11} fontWeight={500}>
+              {formatHoursMinutes(hp.totalHours)}
+            </text>
+          </g>
+        )}
         {/* X labels */}
         {points.map((p, i) => {
-          // Show every label if <=7, otherwise every other
           if (data.length > 7 && i % 2 !== 0 && i !== data.length - 1) return null;
-          const label = p.date.slice(5); // MM-DD
+          const label = p.date.slice(5);
           return (
             <text key={p.date} x={p.x} y={H - 8} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize={9}>
               {label}
@@ -296,6 +326,9 @@ export default function Home() {
   // Supabase debounce ref
   const lastSupabaseSave = useRef(0);
 
+  // Date change detection
+  const currentDateRef = useRef(getTodayString());
+
   // ── Auth ──
   useEffect(() => {
     if (sessionStorage.getItem('authenticated') === 'true') {
@@ -314,10 +347,30 @@ export default function Home() {
     }
   };
 
-  // ── Live clock ──
+  // ── Live clock + date change detection ──
   useEffect(() => {
     setCurrentTime(new Date());
-    const interval = setInterval(() => setCurrentTime(new Date()), 1000);
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+      const today = getTodayString();
+      if (today !== currentDateRef.current) {
+        currentDateRef.current = today;
+        // Stop all running timers and reset
+        setLcRunning(false);
+        setLcRemaining(LEETCODE_TOTAL_SECONDS);
+        setProjRunning(false);
+        setProjElapsed(0);
+        setStudyRunning(false);
+        setStudyElapsed(0);
+        setAppRunning(false);
+        setAppElapsed(0);
+        // Persist reset to localStorage
+        localStorage.setItem('leetcodeState', JSON.stringify({ remainingSeconds: LEETCODE_TOTAL_SECONDS, isRunning: false, lastDate: today }));
+        localStorage.setItem('projectState', JSON.stringify({ elapsedSeconds: 0, isRunning: false, lastDate: today }));
+        localStorage.setItem('studyState', JSON.stringify({ elapsedSeconds: 0, isRunning: false, lastDate: today }));
+        localStorage.setItem('appState', JSON.stringify({ elapsedSeconds: 0, isRunning: false, lastDate: today }));
+      }
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -542,6 +595,18 @@ export default function Home() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [lcRunning, projRunning, studyRunning, appRunning]);
 
+  // ── Live chart data: merge today's current timer values into historical data ──
+  const liveChartData = useMemo(() => {
+    const today = getTodayString();
+    const lcSpent = LEETCODE_TOTAL_SECONDS - lcRemaining;
+    const todayTotal = (lcSpent + projElapsed + studyElapsed + appElapsed) / 3600;
+    const filtered = dailyData.filter((d) => d.date !== today);
+    if (todayTotal > 0) {
+      filtered.push({ date: today, totalHours: todayTotal });
+    }
+    return filtered.slice(-14);
+  }, [dailyData, lcRemaining, projElapsed, studyElapsed, appElapsed]);
+
   // ── Password Gate ──
   if (!isAuthenticated) {
     return (
@@ -710,7 +775,7 @@ export default function Home() {
         {/* Right column — Calendar + Chart */}
         <div className="calendar-column">
           <Calendar completedDates={completedDates} />
-          <DailyChart data={dailyData} />
+          <DailyChart data={liveChartData} />
         </div>
       </div>
     </main>
