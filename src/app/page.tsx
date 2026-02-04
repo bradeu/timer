@@ -100,11 +100,96 @@ async function supabaseInsertCompleted(date: string) {
   if (error) console.error('supabase completed upsert error:', error);
 }
 
+async function supabaseFetchAllTimerStates() {
+  const { data } = await supabase
+    .from('timer_state')
+    .select('*')
+    .order('date', { ascending: true });
+  return (data ?? []) as { date: string; leetcode_remaining_seconds: number; project_elapsed_seconds: number; study_elapsed_seconds: number; app_elapsed_seconds: number }[];
+}
+
 async function supabaseFetchCompletedDates(): Promise<string[]> {
   const { data } = await supabase
     .from('completed_dates')
     .select('date');
   return (data ?? []).map((r: { date: string }) => r.date);
+}
+
+// ─── Daily Chart Component ───
+
+function DailyChart({ data }: { data: { date: string; totalHours: number }[] }) {
+  if (data.length === 0) return null;
+
+  const W = 500;
+  const H = 200;
+  const PAD_L = 40;
+  const PAD_R = 20;
+  const PAD_T = 20;
+  const PAD_B = 40;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
+
+  const maxHours = Math.max(...data.map((d) => d.totalHours), 1);
+  const yMax = Math.ceil(maxHours);
+
+  const points = data.map((d, i) => {
+    const x = PAD_L + (data.length === 1 ? chartW / 2 : (i / (data.length - 1)) * chartW);
+    const y = PAD_T + chartH - (d.totalHours / yMax) * chartH;
+    return { x, y, ...d };
+  });
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  const areaPath = `${linePath} L${points[points.length - 1].x},${PAD_T + chartH} L${points[0].x},${PAD_T + chartH} Z`;
+
+  const yTicks = [];
+  const tickCount = Math.min(yMax, 4);
+  for (let i = 0; i <= tickCount; i++) {
+    const val = (yMax / tickCount) * i;
+    const y = PAD_T + chartH - (val / yMax) * chartH;
+    yTicks.push({ val, y });
+  }
+
+  return (
+    <div className="glass-card p-4 w-full mt-4">
+      <h3 className="text-white/60 text-xs font-semibold uppercase tracking-widest mb-3 text-center">Daily Hours (Last 14 Days)</h3>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ overflow: 'visible' }}>
+        <defs>
+          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(79,172,254,0.4)" />
+            <stop offset="100%" stopColor="rgba(79,172,254,0)" />
+          </linearGradient>
+        </defs>
+        {/* Grid lines + Y labels */}
+        {yTicks.map((t) => (
+          <g key={t.val}>
+            <line x1={PAD_L} y1={t.y} x2={W - PAD_R} y2={t.y} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+            <text x={PAD_L - 6} y={t.y + 4} textAnchor="end" fill="rgba(255,255,255,0.4)" fontSize={10}>
+              {t.val % 1 === 0 ? t.val : t.val.toFixed(1)}h
+            </text>
+          </g>
+        ))}
+        {/* Area fill */}
+        <path d={areaPath} fill="url(#areaGrad)" />
+        {/* Line */}
+        <path d={linePath} fill="none" stroke="rgba(79,172,254,0.8)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+        {/* Dots */}
+        {points.map((p) => (
+          <circle key={p.date} cx={p.x} cy={p.y} r={3} fill="#4facfe" stroke="rgba(255,255,255,0.3)" strokeWidth={1} />
+        ))}
+        {/* X labels */}
+        {points.map((p, i) => {
+          // Show every label if <=7, otherwise every other
+          if (data.length > 7 && i % 2 !== 0 && i !== data.length - 1) return null;
+          const label = p.date.slice(5); // MM-DD
+          return (
+            <text key={p.date} x={p.x} y={H - 8} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize={9}>
+              {label}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
 }
 
 // ─── Calendar Component ───
@@ -199,6 +284,12 @@ export default function Home() {
   // Calendar
   const [completedDates, setCompletedDates] = useState<Set<string>>(new Set());
 
+  // Live clock
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+  // Daily chart data
+  const [dailyData, setDailyData] = useState<{ date: string; totalHours: number }[]>([]);
+
   // Hydration guard
   const [mounted, setMounted] = useState(false);
 
@@ -222,6 +313,13 @@ export default function Home() {
       setPasswordError(true);
     }
   };
+
+  // ── Live clock ──
+  useEffect(() => {
+    setCurrentTime(new Date());
+    const interval = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // ── Load state from localStorage first, then sync with Supabase ──
   useEffect(() => {
@@ -250,6 +348,18 @@ export default function Home() {
         setStudyElapsed(row.study_elapsed_seconds ?? 0);
         setAppElapsed(row.app_elapsed_seconds ?? 0);
       }
+    }).catch(() => {});
+
+    supabaseFetchAllTimerStates().then((rows) => {
+      const processed = rows
+        .map((r) => {
+          const lcSpent = LEETCODE_TOTAL_SECONDS - r.leetcode_remaining_seconds;
+          const total = lcSpent + (r.project_elapsed_seconds ?? 0) + (r.study_elapsed_seconds ?? 0) + (r.app_elapsed_seconds ?? 0);
+          return { date: r.date, totalHours: total / 3600 };
+        })
+        .filter((d) => d.totalHours > 0)
+        .slice(-14);
+      setDailyData(processed);
     }).catch(() => {});
 
     supabaseFetchCompletedDates().then((dates) => {
@@ -473,6 +583,13 @@ export default function Home() {
       {/* Header */}
       <div className="text-center mt-8 mb-2">
         <h1 className="text-4xl font-bold text-white/90 tracking-tight">Assistant</h1>
+        {currentTime && (
+          <p className="text-white/40 text-sm mt-2 tracking-wide">
+            {currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {' \u2013 '}
+            {currentTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })}
+          </p>
+        )}
       </div>
 
       {/* Two-column layout: timers left, calendar right */}
@@ -590,9 +707,10 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right column — Calendar */}
+        {/* Right column — Calendar + Chart */}
         <div className="calendar-column">
           <Calendar completedDates={completedDates} />
+          <DailyChart data={dailyData} />
         </div>
       </div>
     </main>
