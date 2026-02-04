@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 
-const SITE_PASSWORD = 'timer';
+const SITE_PASSWORD = 'bradley';
 const LEETCODE_TOTAL_SECONDS = 2 * 60 * 60; // 2 hours
 const SUPABASE_SAVE_INTERVAL = 5000; // 5 seconds
 
